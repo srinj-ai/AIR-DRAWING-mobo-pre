@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AR Neon Pen Mobile</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background: #050301;
+      overflow: hidden;
+      font-family: sans-serif;
+      color: white;
+      overscroll-behavior: none;
+    }
+
+    video { display: none; }
+
+    canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      transform: scaleX(-1);
+      z-index: 1;
+    }
+
+    #ui {
+      position: absolute;
+      z-index: 2;
+      top: 20px;
+      left: 20px;
+      pointer-events: none;
+      text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+    }
+
+    #clearBtn {
+      position: absolute;
+      z-index: 3;
+      bottom: 30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(245, 208, 97, 0.9);
+      border: 2px solid white;
+      color: black;
+      padding: 15px 30px;
+      font-size: 18px;
+      font-weight: bold;
+      border-radius: 30px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(245, 208, 97, 0.4);
+    }
+
+    #clearBtn:active {
+      transform: translateX(-50%) scale(0.95);
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="ui">
+  <h2>AR Neon Pen</h2>
+  <p>🤏 Pinch thumb & index to draw</p>
+</div>
+
+<button id="clearBtn">CLEAR DRAWING</button>
+
+<video id="vid" playsinline></video>
+<canvas id="c"></canvas>
+
+<script>
+  const vid = document.getElementById('vid');
+  const c = document.getElementById('c');
+  const ctx = c.getContext('2d');
+
+  const clearBtn = document.getElementById('clearBtn');
+
+  const inkCanvas = document.createElement('canvas');
+  const inkCtx = inkCanvas.getContext('2d');
+
+  let cur = [];
+  let isDrawing = false;
+  let wasDrawing = false;
+  let sx = null, sy = null;
+
+  /* ===============================
+     DPI SHARP MOBILE FIX
+  =============================== */
+  function resizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+
+    const temp = document.createElement("canvas");
+    temp.width = inkCanvas.width;
+    temp.height = inkCanvas.height;
+    if (temp.width > 0)
+      temp.getContext("2d").drawImage(inkCanvas, 0, 0);
+
+    c.width = window.innerWidth * dpr;
+    c.height = window.innerHeight * dpr;
+    c.style.width = window.innerWidth + "px";
+    c.style.height = window.innerHeight + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    inkCanvas.width = c.width;
+    inkCanvas.height = c.height;
+    inkCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    if (temp.width > 0)
+      inkCtx.drawImage(temp, 0, 0);
+  }
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  /* ===============================
+     CLEAR
+  =============================== */
+  function clearCanvas() {
+    inkCtx.clearRect(0, 0, inkCanvas.width, inkCanvas.height);
+    cur = [];
+  }
+
+  clearBtn.addEventListener('click', clearCanvas);
+  clearBtn.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    clearCanvas();
+  });
+
+  window.onkeydown = (e) => {
+    if (e.code === "Space") clearCanvas();
+  };
+
+  /* ===============================
+     PEN STYLE
+  =============================== */
+  function setPenStyle(context) {
+    context.shadowColor = '#F5D061';
+    context.shadowBlur = 15;
+    context.strokeStyle = '#F5D061';
+    context.lineWidth = 5;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+  }
+
+  function drawSmoothStroke(context, points) {
+    if (points.length < 2) return;
+
+    context.beginPath();
+    context.moveTo(points[0].x, points[0].y);
+
+    for (let i = 1; i < points.length - 1; i++) {
+      let xc = (points[i].x + points[i + 1].x) / 2;
+      let yc = (points[i].y + points[i + 1].y) / 2;
+      context.quadraticCurveTo(points[i].x, points[i].y, xc, yc);
+    }
+
+    context.lineTo(points[points.length - 1].x,
+                   points[points.length - 1].y);
+
+    context.stroke();
+  }
+
+  /* ===============================
+     MAIN LOOP
+  =============================== */
+  function run(res) {
+
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(res.image, 0, 0, c.width, c.height);
+
+    ctx.fillStyle = 'rgba(10,6,2,0.85)';
+    ctx.fillRect(0, 0, c.width, c.height);
+
+    ctx.drawImage(inkCanvas, 0, 0);
+
+    if (res.multiHandLandmarks?.length > 0) {
+
+      const lm = res.multiHandLandmarks[0];
+
+      const thumb = lm[4];
+      const index = lm[8];
+
+      const rx = ((thumb.x + index.x) / 2) * window.innerWidth;
+      const ry = ((thumb.y + index.y) / 2) * window.innerHeight;
+
+      const dx = (thumb.x - index.x) * window.innerWidth;
+      const dy = (thumb.y - index.y) * window.innerHeight;
+      const dist = Math.hypot(dx, dy);
+
+      // Adaptive threshold based on screen width
+      const pinchThreshold = window.innerWidth * 0.04;
+      isDrawing = dist < pinchThreshold;
+
+      if (sx === null) { sx = rx; sy = ry; }
+      else {
+        sx += (rx - sx) * 0.4;
+        sy += (ry - sy) * 0.4;
+      }
+
+      ctx.beginPath();
+      ctx.arc(sx, sy, isDrawing ? 8 : 6, 0, 2 * Math.PI);
+      ctx.fillStyle = isDrawing ? '#FFFFFF'
+                                : 'rgba(245,208,97,0.4)';
+      ctx.fill();
+
+      if (isDrawing) {
+        if (!wasDrawing) cur = [];
+        cur.push({x: sx, y: sy});
+      }
+      else if (wasDrawing && cur.length > 0) {
+        setPenStyle(inkCtx);
+        drawSmoothStroke(inkCtx, cur);
+        cur = [];
+      }
+
+      wasDrawing = isDrawing;
+
+    } else {
+      if (wasDrawing && cur.length > 0) {
+        setPenStyle(inkCtx);
+        drawSmoothStroke(inkCtx, cur);
+        cur = [];
+      }
+      isDrawing = false;
+      wasDrawing = false;
+      sx = null;
+    }
+
+    if (cur.length > 0) {
+      setPenStyle(ctx);
+      drawSmoothStroke(ctx, cur);
+    }
+  }
+
+  /* ===============================
+     MEDIAPIPE
+  =============================== */
+  const h = new Hands({
+    locateFile: (file) =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  h.setOptions({
+    maxNumHands: 1,
+    modelComplexity: 0,  // Faster for mobile
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6
+  });
+
+  h.onResults(run);
+
+  const cam = new Camera(vid, {
+    onFrame: async () => {
+      await h.send({ image: vid });
+    },
+    width: 640,   // Reduced for mobile FPS boost
+    height: 480,
+    facingMode: "user"
+  });
+
+  cam.start();
+</script>
+
+</body>
+</html>
